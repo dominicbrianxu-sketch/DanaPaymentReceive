@@ -8,10 +8,31 @@ workflows:
       java: 17
 
     scripts:
+      - name: Extract project source
+        script: |
+          set -e
+
+          rm -rf _bridge_src
+          mkdir -p _bridge_src
+
+          unzip -q DanaPaymentBridge_V2_GITHUB_READY.zip -d _bridge_src
+
+          test -f _bridge_src/android/app/build.gradle.kts
+          test -f _bridge_src/android/settings.gradle.kts
+
+          echo "Source extracted successfully"
+
       - name: Build release APK
         script: |
-          cd android
-          gradle :app:assembleRelease --no-daemon
+          set -e
+
+          cd _bridge_src/android
+
+          gradle --version
+
+          gradle :app:assembleRelease \
+            --no-daemon \
+            --stacktrace
 
     artifacts:
-      - android/app/build/outputs/apk/release/app-release.apk
+      - _bridge_src/android/app/build/outputs/apk/release/app-release.apk
