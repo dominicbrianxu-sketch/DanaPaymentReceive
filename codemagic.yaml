@@ -1,0 +1,17 @@
+workflows:
+  dana-payment-receiver-v2:
+    name: DANA Payment Receiver V2 - Telegram Payment Bridge
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      java: 17
+
+    scripts:
+      - name: Build release APK
+        script: |
+          cd android
+          gradle :app:assembleRelease --no-daemon
+
+    artifacts:
+      - android/app/build/outputs/apk/release/app-release.apk
