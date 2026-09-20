@@ -10,29 +10,56 @@ workflows:
     scripts:
       - name: Extract project source
         script: |
-          set -e
+          set -euo pipefail
 
+          echo "=========================================="
+          echo "FIND DANA PAYMENT RECEIVER SOURCE"
+          echo "=========================================="
+
+          ZIP_FILE=""
+          for f in ./*.zip; do
+            [ -f "$f" ] || continue
+            if unzip -l "$f" | grep -q "android/app/build.gradle.kts"; then
+              ZIP_FILE="$f"
+              break
+            fi
+          done
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No compatible DanaPaymentReceiver ZIP found."
+            ls -lah ./*.zip 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Using: $ZIP_FILE"
           rm -rf _bridge_src
           mkdir -p _bridge_src
-
-          unzip -q DanaPaymentBridge_V2_GITHUB_READY.zip -d _bridge_src
+          unzip -q "$ZIP_FILE" -d _bridge_src
 
           test -f _bridge_src/android/app/build.gradle.kts
           test -f _bridge_src/android/settings.gradle.kts
+          test -f _bridge_src/android/app/src/main/AndroidManifest.xml
 
-          echo "Source extracted successfully"
+      - name: Validate Android project
+        script: |
+          set -euo pipefail
+          cd _bridge_src/android
+          gradle --version
+          test -f app/src/main/java/com/varino/danapaymentreceiver/MainActivity.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/Prefs.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/PaymentSender.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/BootReceiver.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/ReceiverHeartbeatService.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/DanaNotificationListener.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/PaymentParser.kt
 
       - name: Build release APK
         script: |
-          set -e
-
+          set -euo pipefail
           cd _bridge_src/android
-
-          gradle --version
-
-          gradle :app:assembleRelease \
-            --no-daemon \
-            --stacktrace
+          gradle :app:assembleRelease --no-daemon --stacktrace
+          test -f app/build/outputs/apk/release/app-release.apk
+          ls -lh app/build/outputs/apk/release/app-release.apk
 
     artifacts:
       - _bridge_src/android/app/build/outputs/apk/release/app-release.apk
