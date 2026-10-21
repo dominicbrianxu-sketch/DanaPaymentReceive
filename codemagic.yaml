@@ -1,6 +1,6 @@
 workflows:
   dana-payment-receiver-v2:
-    name: DANA Payment Receiver V2 - FULL BUILD
+    name: DANA Payment Receiver V2 - Telegram Payment Bridge
     max_build_duration: 60
     instance_type: mac_mini_m2
 
@@ -8,782 +8,103 @@ workflows:
       java: 17
 
     scripts:
-
-      # ============================================================
-      # STEP 1 — FIND AND EXTRACT SOURCE ZIP
-      # ============================================================
-      - name: Find and extract Android source
+      - name: Extract project source
         script: |
           set -euo pipefail
 
-          echo "=================================================="
-          echo " DANA PAYMENT RECEIVER - FULL CODEMAGIC BUILD"
-          echo "=================================================="
-          echo ""
-
-          echo "CM_BUILD_DIR:"
-          echo "$CM_BUILD_DIR"
-          echo ""
-
-          echo "=================================================="
-          echo "FILES AVAILABLE IN BUILD DIRECTORY"
-          echo "=================================================="
-
-          find "$CM_BUILD_DIR" \
-            -maxdepth 4 \
-            -type f \
-            -print \
-            | sort \
-            || true
-
-          echo ""
-
-          # ----------------------------------------------------------
-          # Create working directory
-          # ----------------------------------------------------------
-
-          SOURCE_DIR="$CM_BUILD_DIR/_bridge_src"
-
-          rm -rf "$SOURCE_DIR"
-
-          mkdir -p "$SOURCE_DIR"
+          echo "=========================================="
+          echo "FIND DANA PAYMENT RECEIVER SOURCE"
+          echo "=========================================="
 
           ZIP_FILE=""
 
-          echo "=================================================="
-          echo "SEARCHING FOR ANDROID PROJECT ZIP"
-          echo "=================================================="
-
-          # ----------------------------------------------------------
-          # Search all ZIP files recursively.
-          # ----------------------------------------------------------
-
-          while IFS= read -r -d '' FILE; do
-
-            echo ""
-            echo "Checking:"
-            echo "$FILE"
-
-            ENTRIES="$(unzip -Z1 "$FILE" 2>/dev/null || true)"
-
-            if printf '%s\n' "$ENTRIES" | awk '
-              $0 == "android/app/build.gradle.kts" {
-                build=1
-              }
-
-              $0 == "android/app/build.gradle" {
-                build=1
-              }
-
-              $0 == "android/settings.gradle.kts" {
-                settings=1
-              }
-
-              $0 == "android/settings.gradle" {
-                settings=1
-              }
-
-              $0 == "android/app/src/main/AndroidManifest.xml" {
-                manifest=1
-              }
-
-              END {
-                if (build && settings && manifest) {
-                  exit 0
-                }
-
-                exit 1
-              }
-            '
-            then
-
-              ZIP_FILE="$FILE"
-
-              echo ""
-              echo "=================================================="
-              echo "COMPATIBLE ANDROID ZIP FOUND"
-              echo "=================================================="
-              echo "$ZIP_FILE"
-              echo ""
-
-              break
-
+          # Prefer the explicitly prepared complete ZIP if it exists. This avoids
+          # accidentally extracting an older ZIP when several archives are uploaded.
+          PREFERRED="$CM_BUILD_DIR/DanaPaymentBridge_V4_COMPLETE_DEBUG_READY.zip"
+          if [ -f "$PREFERRED" ]; then
+            ENTRIES="$(unzip -Z1 "$PREFERRED" 2>/dev/null || true)"
+            if printf '%s\n' "$ENTRIES" | grep -Fxq "android/app/build.gradle.kts" &&
+               printf '%s\n' "$ENTRIES" | grep -Fxq "android/settings.gradle.kts" &&
+               printf '%s\n' "$ENTRIES" | grep -Fxq "android/app/src/main/AndroidManifest.xml"; then
+              ZIP_FILE="$PREFERRED"
             fi
-
-          done < <(
-            find "$CM_BUILD_DIR" \
-              -type f \
-              -iname "*.zip" \
-              -print0
-          )
-
-          # ----------------------------------------------------------
-          # Fallback search by Android Gradle file.
-          # ----------------------------------------------------------
+          fi
 
           if [ -z "$ZIP_FILE" ]; then
-
-            echo ""
-            echo "Primary ZIP detection did not find a project."
-            echo "Running fallback detection..."
-            echo ""
-
-            while IFS= read -r -d '' FILE; do
-
-              echo "Fallback checking:"
-              echo "$FILE"
-
-              ENTRIES="$(unzip -Z1 "$FILE" 2>/dev/null || true)"
-
+            while IFS= read -r -d '' f; do
+              [ -f "$f" ] || continue
+              ENTRIES="$(unzip -Z1 "$f" 2>/dev/null || true)"
               if printf '%s\n' "$ENTRIES" | awk '
-                /app\/build\.gradle(\.kts)?$/ {
-                  found_app=1
-                }
-
-                /settings\.gradle(\.kts)?$/ {
-                  found_settings=1
-                }
-
-                /AndroidManifest\.xml$/ {
-                  found_manifest=1
-                }
-
-                END {
-                  if (found_app && found_settings && found_manifest) {
-                    exit 0
-                  }
-
-                  exit 1
-                }
-              '
-              then
-
-                ZIP_FILE="$FILE"
-
-                echo ""
-                echo "Fallback compatible ZIP found:"
-                echo "$ZIP_FILE"
-                echo ""
-
+                $0 == "android/app/build.gradle.kts" { found_build=1 }
+                $0 == "android/settings.gradle.kts" { found_settings=1 }
+                $0 == "android/app/src/main/AndroidManifest.xml" { found_manifest=1 }
+                END { exit !(found_build && found_settings && found_manifest) }
+              '; then
+                ZIP_FILE="$f"
                 break
-
               fi
-
-            done < <(
-              find "$CM_BUILD_DIR" \
-                -type f \
-                -iname "*.zip" \
-                -print0
-            )
-
+            done < <(find "$CM_BUILD_DIR" -type f -iname "*.zip" -print0)
           fi
-
-          # ----------------------------------------------------------
-          # Fail if no compatible ZIP found.
-          # ----------------------------------------------------------
 
           if [ -z "$ZIP_FILE" ]; then
-
-            echo ""
-            echo "=================================================="
-            echo "ERROR: NO COMPATIBLE ANDROID ZIP FOUND"
-            echo "=================================================="
-            echo ""
-
-            echo "ZIP FILES FOUND:"
-            echo ""
-
-            find "$CM_BUILD_DIR" \
-              -type f \
-              -iname "*.zip" \
-              -print \
-              || true
-
-            echo ""
-
-            echo "ZIP CONTENTS:"
-            echo ""
-
-            while IFS= read -r -d '' FILE; do
-
-              echo "--------------------------------------------------"
-              echo "$FILE"
-              echo "--------------------------------------------------"
-
-              unzip -Z1 "$FILE" 2>/dev/null \
-                | head -250 \
-                || true
-
-              echo ""
-
-            done < <(
-              find "$CM_BUILD_DIR" \
-                -type f \
-                -iname "*.zip" \
-                -print0
-            )
-
+            echo "ERROR: No compatible DanaPaymentReceiver ZIP found."
+            ls -lah ./*.zip 2>/dev/null || true
             exit 1
-
           fi
 
-          # ----------------------------------------------------------
-          # Extract ZIP
-          # ----------------------------------------------------------
+          echo "Using: $ZIP_FILE"
+          rm -rf "$CM_BUILD_DIR/_bridge_src"
+          mkdir -p "$CM_BUILD_DIR/_bridge_src"
+          unzip -q "$ZIP_FILE" -d "$CM_BUILD_DIR/_bridge_src"
+          cd "$CM_BUILD_DIR"
 
-          echo ""
-          echo "=================================================="
-          echo "EXTRACTING SOURCE"
-          echo "=================================================="
-          echo ""
+          test -f _bridge_src/android/app/build.gradle.kts
+          test -f _bridge_src/android/settings.gradle.kts
+          test -f _bridge_src/android/app/src/main/AndroidManifest.xml
 
-          echo "ZIP:"
-          echo "$ZIP_FILE"
-          echo ""
-
-          unzip -q "$ZIP_FILE" \
-            -d "$SOURCE_DIR"
-
-          echo ""
-          echo "EXTRACTION COMPLETE"
-          echo ""
-
-          # ----------------------------------------------------------
-          # List extracted files.
-          # ----------------------------------------------------------
-
-          echo "=================================================="
-          echo "EXTRACTED PROJECT FILES"
-          echo "=================================================="
-
-          find "$SOURCE_DIR" \
-            -maxdepth 7 \
-            -type f \
-            -print \
-            | sort \
-            | head -500
-
-          echo ""
-
-          # ----------------------------------------------------------
-          # Detect Android project.
-          # ----------------------------------------------------------
-
-          ANDROID_DIR=""
-
-          if [ -f "$SOURCE_DIR/android/app/build.gradle.kts" ]; then
-
-            ANDROID_DIR="$SOURCE_DIR/android"
-
-          elif [ -f "$SOURCE_DIR/android/app/build.gradle" ]; then
-
-            ANDROID_DIR="$SOURCE_DIR/android"
-
-          else
-
-            FOUND_GRADLE="$(
-              find "$SOURCE_DIR" \
-                -type f \
-                \( \
-                  -name "build.gradle" \
-                  -o \
-                  -name "build.gradle.kts" \
-                \) \
-                -path "*/app/*" \
-                -print \
-                | head -n 1
-            )"
-
-            if [ -n "$FOUND_GRADLE" ]; then
-
-              APP_DIR="$(dirname "$FOUND_GRADLE")"
-
-              ANDROID_DIR="$(dirname "$APP_DIR")"
-
-            fi
-
-          fi
-
-          # ----------------------------------------------------------
-          # Validate Android directory.
-          # ----------------------------------------------------------
-
-          if [ -z "$ANDROID_DIR" ]; then
-
-            echo ""
-            echo "=================================================="
-            echo "ERROR: ANDROID PROJECT NOT FOUND"
-            echo "=================================================="
-            echo ""
-
-            find "$SOURCE_DIR" \
-              -type f \
-              \( \
-                -name "build.gradle" \
-                -o \
-                -name "build.gradle.kts" \
-                -o \
-                -name "settings.gradle" \
-                -o \
-                -name "settings.gradle.kts" \
-                -o \
-                -name "AndroidManifest.xml" \
-              \) \
-              -print \
-              || true
-
-            exit 1
-
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "ANDROID PROJECT DETECTED"
-          echo "=================================================="
-          echo "$ANDROID_DIR"
-          echo ""
-
-          # ----------------------------------------------------------
-          # Required files.
-          # ----------------------------------------------------------
-
-          if [ ! -d "$ANDROID_DIR" ]; then
-
-            echo "ERROR: Android directory does not exist."
-            exit 1
-
-          fi
-
-          if [ ! -d "$ANDROID_DIR/app" ]; then
-
-            echo "ERROR: Android app directory does not exist."
-            exit 1
-
-          fi
-
-          if [ ! -f "$ANDROID_DIR/app/build.gradle.kts" ] && \
-             [ ! -f "$ANDROID_DIR/app/build.gradle" ]; then
-
-            echo "ERROR: app Gradle file not found."
-            exit 1
-
-          fi
-
-          if [ ! -f "$ANDROID_DIR/settings.gradle.kts" ] && \
-             [ ! -f "$ANDROID_DIR/settings.gradle" ]; then
-
-            echo "ERROR: settings Gradle file not found."
-            exit 1
-
-          fi
-
-          if [ ! -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml" ]; then
-
-            echo "ERROR: AndroidManifest.xml not found."
-            exit 1
-
-          fi
-
-          # ----------------------------------------------------------
-          # Save project location.
-          # ----------------------------------------------------------
-
-          cat > "$CM_BUILD_DIR/android_project.env" <<EOF
-          ANDROID_DIR=$ANDROID_DIR
-          SOURCE_DIR=$SOURCE_DIR
-          ZIP_FILE=$ZIP_FILE
-          EOF
-
-          echo ""
-          echo "=================================================="
-          echo "SOURCE EXTRACTION AND VALIDATION PASSED"
-          echo "=================================================="
-
-      # ============================================================
-      # STEP 2 — ENVIRONMENT CHECK
-      # ============================================================
-      - name: Check build environment
+      - name: Validate Android project
         script: |
           set -euo pipefail
+          cd _bridge_src/android
+          gradle --version
+          test -f app/src/main/java/com/varino/danapaymentreceiver/MainActivity.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/Prefs.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/PaymentSender.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/BootReceiver.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/ReceiverHeartbeatService.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/DanaNotificationListener.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/PaymentParser.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/WalletConnectActivity.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/DebugLogger.kt
+          test -f app/src/main/java/com/varino/danapaymentreceiver/LogActivity.kt
+          test -f app/src/main/res/layout/activity_main.xml
+          test -f app/src/main/res/layout/activity_wallet_connect.xml
 
-          source "$CM_BUILD_DIR/android_project.env"
+          python3 - <<'PY_VALIDATE'
+          import pathlib
+          import xml.etree.ElementTree as ET
+          root = pathlib.Path('.')
+          for path in root.rglob('*.xml'):
+              ET.parse(path)
+              print(f'XML OK: {path}')
+          PY_VALIDATE
 
-          echo "=================================================="
-          echo "BUILD ENVIRONMENT"
-          echo "=================================================="
-
-          echo ""
-          echo "Java:"
-          java -version
-
-          echo ""
-          echo "JAVA_HOME:"
-          echo "${JAVA_HOME:-NOT_SET}"
-
-          echo ""
-          echo "Android SDK:"
-          echo "${ANDROID_HOME:-NOT_SET}"
-
-          echo ""
-          echo "Gradle:"
-          if command -v gradle >/dev/null 2>&1; then
-            gradle --version
-          else
-            echo "System Gradle not found."
-          fi
-
-          echo ""
-          echo "Project:"
-          echo "$ANDROID_DIR"
-
-          cd "$ANDROID_DIR"
-
-          echo ""
-          echo "=================================================="
-          echo "PROJECT ROOT"
-          echo "=================================================="
-
-          ls -lah
-
-          echo ""
-          echo "Environment check completed."
-
-      # ============================================================
-      # STEP 3 — VALIDATE SOURCE
-      # ============================================================
-      - name: Validate Android source
-        script: |
-          set -euo pipefail
-
-          source "$CM_BUILD_DIR/android_project.env"
-
-          cd "$ANDROID_DIR"
-
-          echo "=================================================="
-          echo "ANDROID SOURCE VALIDATION"
-          echo "=================================================="
-
-          # ----------------------------------------------------------
-          # Manifest
-          # ----------------------------------------------------------
-
-          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
-            echo "ERROR: AndroidManifest.xml missing."
-            exit 1
-          fi
-
-          echo "OK: AndroidManifest.xml"
-
-          # ----------------------------------------------------------
-          # Gradle
-          # ----------------------------------------------------------
-
-          if [ -f "app/build.gradle.kts" ]; then
-            echo "OK: app/build.gradle.kts"
-          elif [ -f "app/build.gradle" ]; then
-            echo "OK: app/build.gradle"
-          else
-            echo "ERROR: app Gradle file missing."
-            exit 1
-          fi
-
-          if [ -f "settings.gradle.kts" ]; then
-            echo "OK: settings.gradle.kts"
-          elif [ -f "settings.gradle" ]; then
-            echo "OK: settings.gradle"
-          else
-            echo "ERROR: settings Gradle file missing."
-            exit 1
-          fi
-
-          # ----------------------------------------------------------
-          # Source tree
-          # ----------------------------------------------------------
-
-          echo ""
-          echo "Kotlin/Java source files:"
-
-          find app/src \
-            -type f \
-            \( \
-              -name "*.kt" \
-              -o \
-              -name "*.java" \
-              -o \
-              -name "*.xml" \
-            \) \
-            -print \
-            | sort \
-            | head -500
-
-          echo ""
-
-          # ----------------------------------------------------------
-          # Detect Gradle wrapper.
-          # ----------------------------------------------------------
-
-          if [ -f "./gradlew" ]; then
-
-            chmod +x ./gradlew
-
-            echo "Gradle wrapper found."
-
-          else
-
-            echo "Gradle wrapper not included."
-
-            if ! command -v gradle >/dev/null 2>&1; then
-
-              echo ""
-              echo "ERROR: No Gradle wrapper and no system Gradle."
-              exit 1
-
-            fi
-
-            echo "System Gradle will be used."
-
-          fi
-
-          echo ""
-          echo "Source validation completed successfully."
-
-      # ============================================================
-      # STEP 4 — CLEAN BUILD
-      # ============================================================
-      - name: Clean Android project
-        script: |
-          set -euo pipefail
-
-          source "$CM_BUILD_DIR/android_project.env"
-
-          cd "$ANDROID_DIR"
-
-          echo "=================================================="
-          echo "CLEAN BUILD"
-          echo "=================================================="
-
-          if [ -x "./gradlew" ]; then
-
-            ./gradlew \
-              clean \
-              --no-daemon \
-              --stacktrace
-
-          else
-
-            gradle \
-              clean \
-              --no-daemon \
-              --stacktrace
-
-          fi
-
-          echo ""
-          echo "Clean completed."
-
-      # ============================================================
-      # STEP 5 — BUILD RELEASE APK
-      # ============================================================
       - name: Build release APK
         script: |
           set -euo pipefail
+          cd _bridge_src/android
+          gradle :app:assembleRelease --no-daemon --stacktrace
 
-          source "$CM_BUILD_DIR/android_project.env"
+          echo "Isi folder output APK:"
+          ls -lh app/build/outputs/apk/release/ || true
 
-          cd "$ANDROID_DIR"
-
-          echo "=================================================="
-          echo "BUILD RELEASE APK"
-          echo "=================================================="
-
-          echo ""
-          echo "Project:"
-          echo "$ANDROID_DIR"
-
-          echo ""
-          echo "Starting Gradle release build..."
-
-          if [ -x "./gradlew" ]; then
-
-            ./gradlew \
-              :app:assembleRelease \
-              --no-daemon \
-              --stacktrace
-
-          else
-
-            gradle \
-              :app:assembleRelease \
-              --no-daemon \
-              --stacktrace
-
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "GRADLE BUILD FINISHED"
-          echo "=================================================="
-
-          echo ""
-          echo "Searching for APK..."
-
-          APK_COUNT=0
-
-          while IFS= read -r -d '' APK; do
-
-            APK_COUNT=$((APK_COUNT + 1))
-
-            echo ""
-            echo "APK #$APK_COUNT"
-            echo "$APK"
-
-            ls -lh "$APK"
-
-          done < <(
-            find app/build/outputs \
-              -type f \
-              -name "*.apk" \
-              -print0 \
-              2>/dev/null
-          )
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-
-            echo ""
-            echo "ERROR: NO APK GENERATED."
-            echo ""
-
-            echo "Build outputs:"
-            find app/build \
-              -maxdepth 8 \
-              -type f \
-              -print \
-              | sort \
-              || true
-
+          APK_PATH=$(find app/build/outputs/apk/release -maxdepth 1 -name "*.apk" | head -n1)
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: Tidak ada file .apk yang dihasilkan di app/build/outputs/apk/release/"
             exit 1
-
           fi
+          echo "APK ditemukan: $APK_PATH"
+          ls -lh "$APK_PATH"
 
-          echo ""
-          echo "APK generated successfully."
-
-      # ============================================================
-      # STEP 6 — APK VERIFICATION
-      # ============================================================
-      - name: Verify generated APK
-        script: |
-          set -euo pipefail
-
-          source "$CM_BUILD_DIR/android_project.env"
-
-          cd "$ANDROID_DIR"
-
-          echo "=================================================="
-          echo "APK VERIFICATION"
-          echo "=================================================="
-
-          APK_FOUND=""
-
-          while IFS= read -r -d '' APK; do
-
-            APK_FOUND="$APK"
-
-            echo ""
-            echo "Found APK:"
-            echo "$APK"
-
-            ls -lh "$APK"
-
-            # ------------------------------------------------------
-            # Optional Android APK inspection.
-            # ------------------------------------------------------
-
-            if command -v aapt >/dev/null 2>&1; then
-
-              echo ""
-              echo "APK package information:"
-
-              aapt dump badging "$APK" \
-                | head -40 \
-                || true
-
-            fi
-
-            break
-
-          done < <(
-            find app/build/outputs \
-              -type f \
-              -name "*.apk" \
-              -print0 \
-              2>/dev/null
-          )
-
-          if [ -z "$APK_FOUND" ]; then
-
-            echo "ERROR: APK verification failed."
-            exit 1
-
-          fi
-
-          echo ""
-          echo "APK verification completed."
-
-      # ============================================================
-      # STEP 7 — FINAL BUILD REPORT
-      # ============================================================
-      - name: Final build report
-        script: |
-          set -euo pipefail
-
-          source "$CM_BUILD_DIR/android_project.env"
-
-          echo "=================================================="
-          echo "FINAL BUILD REPORT"
-          echo "=================================================="
-
-          echo ""
-          echo "Source ZIP:"
-          echo "$ZIP_FILE"
-
-          echo ""
-          echo "Android project:"
-          echo "$ANDROID_DIR"
-
-          echo ""
-          echo "Generated APK files:"
-          echo ""
-
-          find "$ANDROID_DIR/app/build/outputs" \
-            -type f \
-            -name "*.apk" \
-            -exec ls -lh {} \; \
-            2>/dev/null \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "BUILD COMPLETE"
-          echo "=================================================="
-
-          echo ""
-          echo "DANA Payment Receiver / TON Connect project"
-          echo "release build process finished."
-
-    # ==============================================================
-    # ARTIFACTS
-    # ==============================================================
     artifacts:
-
-      # Standard release output.
       - _bridge_src/android/app/build/outputs/apk/release/*.apk
-
-      # Catch APKs if the project has a different nested output.
-      - _bridge_src/**/build/outputs/**/*.apk
-
-      # Mapping files if generated.
-      - _bridge_src/**/build/outputs/mapping/**/*.txt
-
-      # Build reports.
-      - _bridge_src/**/build/reports/**
